@@ -1,31 +1,70 @@
-const { User, UserSchema } = require('./user.model');
-const { UserInfo, UserInfoSchema } = require('./userInfo.model');
-const { Connection, ConnectionsSchema } = require('./connection.model');
-const { Message, MessageSchema } = require('./message.model');
-const { Conversation, ConversationsSchema } = require('./conversation.model');
-const { TimeSheet, TimeSheetSchema } = require('./timesheet.model');
+const express = require('express');
+const app = express();
+const port = process.env.PORT || 3002;
+const httpServer = require('http').createServer(app);
+const routerApi = require('./routes');
+const cors = require('cors');
+const passport = require('passport');
 
-/**
- *  Inits all of the DB Models into the sequelize instance
- * @param sequelize sequelize instance
- */
+const { errorHandler, logErrors, boomErrorHandler, sequelizeErrorHandler } = require('./middlewares/error.handler');
+const { application_name } = require('pg/lib/defaults');
 
-function setupModels(sequelize) {
-  // inits models and schema
-  User.init(UserSchema, User.config(sequelize)); // Inits 'users' table
-  UserInfo.init(UserInfoSchema, UserInfo.config(sequelize)); // Init 'customers' table
-  Connection.init(ConnectionsSchema, Connection.config(sequelize)); // Init 'connections' table
-  Message.init(MessageSchema, Message.config(sequelize)); // Init ''Connection.config(sequelize))
-  Conversation.init(ConversationsSchema, Conversation.config(sequelize)); // Init ''Connection.config(sequelize))
-  TimeSheet.init(TimeSheetSchema, TimeSheet.config(sequelize)); // Init ''Connection.config(sequelize))
+const options = {
+  cors: {
+    origin: '*',
+  },
+};
 
-  // inits relations
-  User.associate(sequelize.models);
-  UserInfo.associate(sequelize.models);
-  Connection.associate(sequelize.models);
-  Message.associate(sequelize.models);
-  Conversation.associate(sequelize.models);
-  TimeSheet.associate(sequelize.models);
-}
+const wrap = (middleware) => (socket, next) => middleware(socket.request, {}, next);
+const io = require('socket.io')(httpServer, options);
+io.use(wrap(passport.initialize()));
+io.use(wrap(passport.authenticate('jwt', { session: false })));
+io.on('connection', (socket) => {
+  console.log('Connected to socket.io');
+  socket.on('setup', (userData) => {
+    socket.join(userData._id);
+    socket.emit('connected');
+  });
 
-module.exports = setupModels;
+  socket.on('join chat', (room) => {
+    if (room) {
+      socket.join(room);
+      console.log('User ' + socket.id + ' Joined Room: ' + room);
+    }
+  });
+
+  socket.on('new message', (newMessageRecieved) => {
+    var chat = newMessageRecieved.id;
+    console.log('mesasge in chat id ' + chat);
+    if (!chat) return console.log('chat not defined');
+    socket.in(chat).emit('message received', newMessageRecieved);
+  });
+
+  socket.off('setup', () => {
+    console.log('USER DISCONNECTED');
+  });
+
+  socket.on('disconnect', (socket) => {
+    console.log('disconnected');
+  });
+});
+
+io.on('notification', (socket) => {
+  console.log('disoncee');
+});
+//express middlewares
+app.use(express.urlencoded({ extended: true }));
+app.use(express.json());
+app.use(cors());
+
+require('./utils/auth');
+
+routerApi(app); // initialize the router
+
+// middleware to handle errors
+app.use(logErrors);
+app.use(boomErrorHandler);
+app.use(sequelizeErrorHandler);
+app.use(errorHandler);
+
+httpServer.listen(port, () => console.log('Listening on port 3000'));
